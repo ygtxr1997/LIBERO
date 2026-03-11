@@ -1,0 +1,275 @@
+<div align="center">
+  <img src="images/LIEBRO-FT_logo2.png" width="70%">
+
+  # LIBERO-FT: Evaluating Robotic Manipulation under Force-Related Domain Shifts
+</div>
+
+
+<div align="center">
+  <img src="./images/k4_examples.gif" width="100%" alt="replay_k1_open_put">
+</div>
+
+## 📖 Overview
+
+`LIBERO-FT` is a toolkit (including benchmark) developed for evaluating robotic manipulation under **force-related** domain shifts. 
+Highly based on the LIBERO benchmark, it can be considered an extension that builds upon its core functionality. 
+Key features include extracting 6D wrench force-torque data from the simulator (Mujoco), replaying and saving benchmark trajectories, 
+and modifying physical properties like gripper stiffness and friction to simulate domain shifts (based on [Robosuite]()). 
+This repository aims to provide a framework for testing and evaluating the adaptability of robotic models to 
+varying physical conditions, enabling thorough analysis before deploying force-based policies into real-world scenarios.
+
+
+## ✨ Features
+
+- **Read Mujoco 6D force-torque data (MujocoSensorReader)**: Reads raw 6D wrench force-torque data from the native Mujoco sensors and exposes it to the LIBERO `OffScreenRenderEnv` via the `WrenchObsWrapper`.
+- **Replay original LIBERO demonstrations and save force-torque data (HDF5Replayer)**: Replays full trajectories based on LIBERO benchmark demonstrations (e.g., LIBERO-90), reading and saving force-torque data into new HDF5 files.
+- **Physical domain shift (PhysicsHelper)**: Modifies physical properties like gripper stiffness, friction, and gravity in Robosuite, and evaluates model robustness against physical domain shifts using the `LiberoForceSocketEvaluator`.
+- **A training&testing example**: Demonstrates training and testing of a diffusion policy with added force-torque inputs, evaluating performance under various domain shifts after in-domain training.
+
+
+## 🛠️ Installation
+
+`LIBERO-FT` shares most of its environment with the original [LIBERO](), with only a few additional dependencies required for debugging and training purposes. To get started, follow these steps:
+
+```shell
+# Install original LIBERO dependencies
+# Please refer to the original LIBERO repository for detailed installation instructions.
+
+# Install additional dependencies for better visualization and debugging
+# pip install this with git+ (full link is omitted here): ygtxr1997/RoboKit.git@6066dbb
+```
+
+
+## 💽 Datasets
+
+Our replayed trajectories are injected with **wrench force-torque sensory data** into the original LIBERO HDF5 files.
+
+Original LIBERO data has NO force-torque data.
+
+
+## 🚀 Usage
+
+### 1. 🎬 Replay original LIBERO trajectory and save force-torque sensory data
+
+We provide a class `libero.force.hdf5_replayer.HDF5Replayer` to replay LIBERO trajectories online on your own GPU.
+`HDF5Replayer` can construct the full environment according to the meta info saved in LIBERO HDF5 files, replay actions frame-by-frame, and consequently check if the replayed trajectory succeds or not.
+
+A usage example for `HDF5Replayer` is available at: [notebooks/force_hdf5_replayer.ipynb](./notebooks/force_hdf5_replayer.ipynb).
+
+Below are the visualization examples of 2x speedup replayed trajectories (left to right are: original observation saved in LIBERO HDF5, online observation during replay, 6D force-torque sensory data):
+
+<div align="center">
+  <img src="./images/replay_00_rst=-1_suc=1_KITCHEN_SCENE1_open_the_top_drawer_of_the_cabinet_and_put_the_bowl_in_it.bddl.gif" width="100%" alt="replay_k1_open_put">
+  <p>(Click to play) Based on LIBERO-90: KITCHEN_SCENE1_open_the_top_drawer_of_the_cabinet_and_put_the_bowl_in_it</p>
+</div>
+
+<div align="center">
+  <img src="./images/replay_00_rst=-1_suc=1_KITCHEN_SCENE7_open_the_microwave.bddl.gif" width="100%" alt="replay_k1_open_put">
+  <p>(Click to play) Based on LIBERO-90: KITCHEN_SCENE7_open_the_microwave</p>
+</div>
+
+
+### 2. 🔍 Check the newly saved HDF5 (with force-torque sensory data)
+
+Structure of new HDF5 data saved by `HDF5Replayer`, where a new key named `data/demo_9/obs/wrenches` is added into it like this:
+
+```shell
+[GRP ] data/demo_9
+[DSET] data/demo_9/actions shape=(201, 7) dtype=float64
+[DSET] data/demo_9/dones shape=(201,) dtype=uint8
+[GRP ] data/demo_9/obs
+[DSET] data/demo_9/obs/agentview_rgb shape=(201, 128, 128, 3) dtype=uint8
+[DSET] data/demo_9/obs/ee_ori shape=(201, 3) dtype=float64
+[DSET] data/demo_9/obs/ee_pos shape=(201, 3) dtype=float64
+[DSET] data/demo_9/obs/ee_states shape=(201, 6) dtype=float64
+[DSET] data/demo_9/obs/eye_in_hand_rgb shape=(201, 128, 128, 3) dtype=uint8
+[DSET] data/demo_9/obs/gripper_states shape=(201, 2) dtype=float64
+[DSET] data/demo_9/obs/joint_states shape=(201, 7) dtype=float64
+[DSET] data/demo_9/obs/wrenches shape=(201, 6) dtype=float32
+[DSET] data/demo_9/replay_reset_every shape=(1,) dtype=int8
+[DSET] data/demo_9/rewards shape=(201,) dtype=uint8
+[DSET] data/demo_9/robot_states shape=(201, 9) dtype=float64
+[DSET] data/demo_9/states shape=(201, 47) dtype=float64
+```
+The shape (201, 6) means that the length of a single trajectory is 201 and the dimension of wrench mounted force-torque sensory data is 6.
+
+### 3. 🧠 Train your own force-conditioned action policy
+
+For training and evalution, we have adoped [Diffusion Policy]() as the baseline and added extra force modality input like this:
+
+```yaml
+image_shape: &image_shape [3, 128, 128]  # ori:[3, 240, 320]
+shape_meta: &shape_meta  # [WARNING]: the order of shape_meta is very important!!!
+  obs:
+    image:  # static
+      shape: *image_shape
+      type: rgb
+    gripper:  # gripper
+      shape: *image_shape
+      type: rgb
+    joint_state:
+      shape: [6]
+      type: low_dim
+    force:  # will load `force_torque` from dataset
+      shape: [6]
+      type: low_dim
+```
+
+We named this force-conditioned diffusion policy as `DP-Force`.
+The detailed evaluation results of `DP-Force` are available at: [Benchmark Results](#benchmark-results)
+
+
+### 4. ⚖️ Evaluate your policy under in-domain and force-related domain shift settings
+
+#### Simulator with force-torque observation
+
+This repo provides a class `libero.force.force_benchmark.SingleForceEnv` for force-conditioned robotic manipulation evaluation.
+
+In `SingleForceEnv.init_env()` function, a force-torque wrapper `WrenchObsWrapper` takes as input the original LIBERO env `OffScreenRenderEnv` and inject force-torque sensory data into it.
+
+Below is the init function of `SingleForceEnv`.
+```python
+class SingleForceEnv:
+    def __init__(
+            self,
+            hdf5_read_path: str = None,
+            camera_hw: tuple = (128, 128),
+            env_seed: int = 0,
+            libero_code_root: str = "/home/Anonymous/code/LIBERO-FT/",
+            bddl_path: str = None,
+            benchmark_task_suite_name: str = None,  # in `libero_{10/90/object/goal/spatial}`
+            # PhysicsHelper params
+            phy_keywords: tuple = ("cabinet", "drawer", "door", "basket", "object", "tool"),
+    ):
+```
+* `hdf5_read_path`: the force-torque injected HDF5 file generated by `HDF5Replayer`
+* `phy_keywords`: for **In-domain** evalutaion, this can be set as `None`; for **Domain-shifted** evaluation, the env will modify the Mujoco physical attributes of the objects (or robotic gripper) whose names contain the keywords
+
+#### Force-related domain shift
+
+The init function of `SingleForceEnv` contains an instance named `self.physics_helper` initialized like this:
+
+```python
+self.physics_helper = PhysicsHelper(
+            self.env.env.sim.model,
+            object_keywords=phy_keywords,
+            random_seed=self.env_seed,
+        )
+# Note: usage: apply_dynamics_shift; restore_original_params;
+```
+
+And the `apply_dynamics_shift` of `PhysicsHelper` can modify the Mujoco physical attributes (usually for making task more difficult):
+```python
+self.physics_helper.apply_dynamics_shift(
+            model=self.env.env.sim.model,  # NOTE: don't know why, but we have to resend the sim.model here
+            frictionloss_scale=frictionloss_scale,
+            damping_scale=damping_scale,
+            sliding_friction_scale=sliding_friction_scale,
+            gravity_z_range=gravity_z_range,
+            tweak_solref_range=tweak_solref_range,
+            rng=rng,
+        )
+```
+* `frictionloss_scale/damping_scale/sliding_friction_scale`: controlling the **friction** of the robotic gripper and other interacted objects, larger scale means larger friction for objects and vice versa; for robotic gripper, we always *reduce* the friction to make it smoother and difficult to do contact-relaed tasks.   
+* `gravity_z_range=gravity_z_range`: controlling the z-axis of the **gravity**, larger value means heavier.
+* `tweak_solref_range`: controlling the **stiffness** of the gripper, larger value means harder (like smoother surface), and smaller value means softer (Note: too small value may leads to *Model Clipping*).
+* `rng`: numpy random generator
+
+> **[Important Note]**: 
+> 
+> While our initial design aimed for a linear correlation between parameter scaling and task difficulty (e.g., enlarging friction scale values to universally increase difficulty), experiments revealed inconsistent effects across tasks; for instance, reduced friction complicates microwave opening (slippage) but simplifies drawer sliding (reduced resistance).
+> 
+> To address this without manual per-task tuning, we adopt a worst-case evaluation strategy: we measure success rates under opposing physical shifts (e.g., high vs. low friction/stiffness) and report the minimum performance. 
+This approach is reasonable, ensuring the resulting evaluation data is meaningful and rigorously reflects the model's true robustness.
+
+#### Socket-based evaluation
+
+Since the python environments for model training and simulator evaluating are usually inconsistent, we also provide a socket-based evaluator (based on [Uvicorn]()) named `libero.force.force_benchmark.LiberoForceSocketEvaluator`. A usage example is available at [eval_socket.py](./eval_socket.py).
+
+
+## 🏆 Benchmark Results
+
+We evaluated the baseline model `DP-Force` (Diffusion Policy with force modality) across 12 selected contact-dependent tasks. 
+For each irrelevant task, we train a single DP-force model (12 tasks corresponds to 9 models).
+The evaluation protocol tests the model's zero-shot robustness under various physical domain shifts: **In-domain** (`base`), **Friction** scale (`f2`, `f0.5`, and the worst-case `fmin`), **Stiffness** scale (`s50`, `s0.5`, and the worst-case `smin`), and **Gravity** scale (`g2`). 
+
+As shown in the table below, while the model achieves a solid average success rate of 72.83% in-domain, its performance degrades significantly under unseen physical variations. Notably, heavier gravity (`g2`) and worst-case friction shifts (`fmin`) cause the sharpest drops in performance (down to 41.00% and 57.83%, respectively), highlighting the challenging nature of zero-shot transfer in contact-rich environments.
+
+
+| Task_ID | Ckpt | base | f2 | f0.5 | s50 | s0.5 | g2 | fmin | smin |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **k10_close_put_blackbowl** | ep550 | 56 | 44 | | 52 | 62 | 22 | 44 | 52 |
+| **k1_open_top** | ep600 | 84 | 74 | | 72 | 88 | 48 | 74 | 72 |
+| **k5_close** | ep1350 | 80 | 88 | 74 | 76 | 76 | 46 | 74 | 76 |
+| **k10_close** | ep550 | 98 | 98 | | 96 | 94 | 44 | 98 | 94 |
+| **k2_open** | ep1350 | 88 | 56 | | 88 | 80 | 66 | 56 | 80 |
+| **k6_close** | ep600 | 56 | 50 | 70 | 54 | 70 | 22 | 50 | 54 |
+| **k1_open_bottom** | ep1000 | 82 | 36 | 74 | 70 | 78 | 34 | 36 | 70 |
+| **k4_close_bottom_open_top** | ep1400 | 46 | 28 | | 42 | 56 | 18 | 28 | 42 |
+| **k7_open** | ep700 | 70 | 76 | 56 | 72 | 46 | 34 | 56 | 46 |
+| **k1_open_top_put_bowl** | ep600 | 56 | 36 | | 52 | 66 | 28 | 36 | 52 |
+| **k4_close_bottom** | ep1400 | 98 | 94 | | 94 | 96 | 88 | 94 | 94 |
+| **s3_pick_book_place_leftcaddy** | ep850 | 60 | 48 | 54 | 50 | 50 | 42 | 48 | 50 |
+| **Averaged Success Rate (%)** |  | **72.83** | 60.67 | 65.60 | 68.17 | 71.83 | **41.00** | **57.83** | **65.17** |
+
+The map between `Task_ID` and original HDF5 filename can be found at: [documents/LIBERO_task_id.md](./documents/LIBERO_task_id.md).
+
+
+#### Ablation Study: Is force sensor helpful?
+
+To verify the effectiveness of the injected force-torque observations, we conducted an ablation study by masking out the force data (`force*0`). The table below compares the standard `DP-Force` model against the ablation baseline on two representative tasks. 
+
+| Model / Setting | Task_ID | Ckpt | base | f2 | g2 | s50 | Shift Avg |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **DP-Force** | k1_open_top | ep600 | **84** | **74** | **48** | 72 | **64.67** |
+| *DP w/o Force* | k1_open_top | ep700 | 78 | 66 | 36 | **74** | 58.67 |
+| **DP-Force** | k1_open_top_put_bowl | ep600 | **56** | **36** | **28** | **52** | **38.67** |
+| *DP w/o Force* | k1_open_top_put_bowl | ep700 | 52 | **36** | 26 | 44 | 35.33 |
+
+As shown in the `Shift Avg` column, the model equipped with force-torque sensors (`DP-Force`) achieves consistently higher average success rates under physical domain shifts compared to the baseline without force inputs. This demonstrates that incorporating the force modality not only maintains in-domain performance but, more importantly, enhances the model's robustness and adaptability to unexpected, unseen physical dynamics.
+
+
+## 🗂️ Project Structure
+
+```shell
+LIBERO-FT/
+├── libero/
+│   ├── force/               # Core code for force-torque injection & domain shifts
+│   │   ├── ...              # (Contains HDF5Replayer, PhysicsHelper, etc.)
+│   └── datasets/            # Recommended directory for storing HDF5 datasets
+├── notebooks/               # Jupyter notebooks for usage examples
+├── eval_socket.py           # Socket-based evaluation script 
+├── requirements.txt         # Dependencies
+└── README.md                # Project documentation
+```
+
+## ✅ TODO List
+
+- [ ] **Release DP-Force pipeline**: Release the complete training and testing codebase for the `DP-Force` baseline.
+- [ ] **Scale up dataset**: Process and inject force-torque data for the remaining tasks in the LIBERO-90/130 datasets.
+- [ ] **More Baselines**: Evaluate multi-task and language-conditioned foundation models.
+- [ ] **Dynamic Domain Shifts**: Implement intra-episode physical parameter changes (e.g., objects becoming slippery dynamically during the operation).
+- [ ] **New contact-rich tasks**: Design and integrate genuine contact-rich tasks (e.g., screwdriving, wiping glass, sweeping) from scratch.
+
+
+## 🚧 Limitations
+
+- **Lack of True Contact-Rich Tasks & Data Scale:** The original LIBERO benchmark does not provide dedicated contact-rich tasks (e.g., screwdriving, wiping glass, sweeping). Constrained by computational resources, we have currently only processed 11 open/close tasks and 1 pick-and-place task from LIBERO-90, as these still heavily rely on force feedback. We will continue processing more data and highly encourage the community to contribute by sharing the processing workload or designing genuine contact-rich tasks from scratch.
+- **Limited Baselines:** We only benchmarked Diffusion Policy with additional force modality input, which is nominally a single-task model without natural language conditioning support. We plan to evaluate more multi-task and language-conditioned baselines in the future and welcome researchers to share their own benchmarking results on our dataset.
+- **Simplified Domain Shifts:** The current implementation of force-related domain shifts is relatively simple and may not be comprehensive enough. For instance, physical parameters cannot dynamically change over time within an episode, and we have not fine-tuned shift parameters for each individual task.
+
+
+## 🎓 Citation
+
+```latex
+@misc{LIBEROFT2026,
+  author = {{Anonymous}},
+  year = {2026},
+}
+```
+
+## ❤️ Acknowledgements
+
+- [Mujoco]() for the underlying force sensor simulation.
+- [Robosuite]() for providing the robotic simulation environment.
+- [LIBERO Benchmark]() which this codebose highly depends on.
